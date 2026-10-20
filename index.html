@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>COMBO BREAKER — Arkanoid x RPG</title>
+<style>
+:root{color-scheme:dark;--cyan:#72f7ff;--pink:#ff75c8;--gold:#ffe69b}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#17234a,#070b18 70%);font-family:system-ui,-apple-system,sans-serif;color:#eef6ff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+.shell{width:min(1100px,100%)}header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.logo{font-weight:1000;letter-spacing:.12em;font-size:clamp(18px,3vw,27px);color:var(--cyan);text-shadow:0 0 18px #3deaff77}.logo small{display:block;font-size:10px;letter-spacing:.28em;color:#a9b8dd}
+.stats{display:flex;gap:8px;flex-wrap:wrap}.pill{background:#121b35;border:1px solid #35456f;border-radius:10px;padding:7px 11px;font-size:12px;color:#bfcdf0}.pill b{color:white;font-size:14px;margin-left:4px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:12px}
+.gamebox{position:relative;border:1px solid #3b5284;border-radius:15px;overflow:hidden;background:#080d20;box-shadow:0 15px 60px #0008}
+canvas{display:block;width:100%;height:auto;aspect-ratio:800/570;touch-action:none}
+.sidebar{background:#10182d;border:1px solid #2a3c66;border-radius:15px;padding:14px;display:flex;flex-direction:column;gap:13px}
+h3{font-size:12px;letter-spacing:.15em;color:var(--cyan);margin:0 0 8px}.xpbar{height:8px;background:#283451;border-radius:20px;overflow:hidden;margin:8px 0}.xpfill{height:100%;width:0;background:linear-gradient(90deg,#65e8ff,#b78cff);transition:width .2s}
+.statline{display:flex;justify-content:space-between;font-size:12px;color:#c4cee8;margin:5px 0}.upgrade{border:1px solid #30436e;background:#151f3a;border-radius:9px;padding:8px;margin:6px 0;font-size:12px;color:#e6edff}.upgrade.locked{opacity:.45}.upgrade strong{color:var(--gold);display:block;font-size:12px;margin-bottom:3px}
+.controls{font-size:11px;color:#a9b8dd;line-height:1.65}.btnrow{display:flex;gap:8px;margin-top:10px}.btn{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-weight:800;color:#09101f;background:linear-gradient(100deg,var(--cyan),#b3a4ff);box-shadow:0 4px 18px #72f7ff22}.btn.secondary{background:#202b4a;color:#dce8ff;border:1px solid #435780}.btn:active{transform:translateY(1px)}
+.toast{position:absolute;top:12px;left:50%;transform:translateX(-50%);padding:8px 14px;background:#101a34eF;border:1px solid #70eaff;border-radius:30px;color:#eafcff;font-size:12px;pointer-events:none;white-space:nowrap;opacity:0;transition:opacity .2s}.toast.show{opacity:1}
+@media(max-width:760px){.layout{grid-template-columns:1fr}.sidebar{display:grid;grid-template-columns:1fr 1fr}.sidebar section:last-child{grid-column:1/-1}.stats{width:100%}}
+</style>
+</head>
+<body><main class="shell">
+<header><div class="logo">COMBO BREAKER <small>ARKANOID × RPG · BREAK THE LIMIT</small></div><div class="stats"><div class="pill">LEVEL <b id="lv">1</b></div><div class="pill">EXP <b id="xp">0</b></div><div class="pill">COMBO <b id="combo">0</b></div><div class="pill">SCORE <b id="score">0</b></div></div></header>
+<div class="layout"><div class="gamebox"><canvas id="game" width="800" height="570" aria-label="ブロック崩しゲーム"></canvas><div class="toast" id="toast"></div></div>
+<aside class="sidebar">
+<section><h3>PLAYER STATUS</h3><div class="statline"><span>次のレベルまで</span><b id="nextxp">100 EXP</b></div><div class="xpbar"><div class="xpfill" id="xpfill"></div></div><div class="statline"><span>ボール数</span><b id="balls">1</b></div><div class="statline"><span>パドル幅</span><b id="pwidth">100</b></div><div class="statline"><span>レーザー</span><b id="laser">未解放</b></div></section>
+<section><h3>SKILL TREE</h3><div id="skills"></div></section>
+<section><h3>HOW TO PLAY</h3><div class="controls">マウス / ← → キーで移動<br>タップ / クリックで開始・発射<br>ブロックを連続破壊してコンボEXPを稼ごう。コンボ倍率はどんどん上昇！<br><br>レベルアップで攻撃スキルが自動解放されます。</div><div class="btnrow"><button class="btn" id="start">ゲーム開始</button><button class="btn secondary" id="pause">一時停止</button></div></section>
+</aside></div></main>
+<script>
+(()=>{
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id);
+const W=800,H=570;
+let state='title',last=0,raf=0,toastTimer=0,level=1,xp=0,nextXP=100,score=0,combo=0,comboTimer=0,shake=0;
+let paddle={x:350,y:526,w:100,h:13,speed:8};
+let balls=[],blocks=[],lasers=[],bombs=[],particles=[];
+let skills={double:false,speed:false,triple:false,wide:false,autoLaser:false,prism:false,bomb:false};
+const skillInfo=[
+[2,'DOUBLE SHOT','ボールが2個に！'],[3,'OVERDRIVE','ボール速度アップ'],[4,'TRIPLE SHOT','ボールが3個に！'],[5,'WIDE BODY','パドル幅アップ'],[6,'AUTO LASER','貫通レーザー自動射出'],[8,'PRISM LASER','反射・拡散レーザー'],[10,'NOVA BOMB','広範囲を爆破！']];
+function resize(){/* CSS scales canvas; game uses stable virtual coordinates */}
+function toast(s){$('toast').textContent=s;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),1500)}
+function makeLevel(){blocks=[];let rows=Math.min(5+Math.floor((level-1)/2),8),cols=10,bw=65,bh=22,gap=7,startX=(W-(cols*(bw+gap)-gap))/2;
+for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){let hp=1+(r>1?1:0)+(level>4&&r<2?1:0);blocks.push({x:startX+c*(bw+gap),y:76+r*(bh+8),w:bw,h:bh,hp,max:hp,alive:true,hue:(r*38+c*7+level*20)%360});}}
+function reset(){level=1;xp=0;nextXP=100;score=0;combo=0;comboTimer=0;skills={double:false,speed:false,triple:false,wide:false,autoLaser:false,prism:false,bomb:false};paddle.w=100;paddle.x=(W-paddle.w)/2;balls=[];lasers=[];bombs=[];particles=[];makeLevel();spawnBall();state='ready';updateUI();draw()}
+function spawnBall(x=paddle.x+paddle.w/2,y=paddle.y-12,vx=(Math.random()-.5)*3,vy=-5){balls.push({x,y,vx,vy,r:7,trail:[]})}
+function launch(){if(state==='title'||state==='over'){reset();state='playing';return}if(state==='ready'){state='playing';return}if(state==='playing'&&balls.length===0){spawnBall();return}}
+function skillUnlock(){for(const [lvl,key,name] of [[2,'double','DOUBLE SHOT'],[3,'speed','OVERDRIVE'],[4,'triple','TRIPLE SHOT'],[5,'wide','WIDE BODY'],[6,'autoLaser','AUTO LASER'],[8,'prism','PRISM LASER'],[10,'bomb','NOVA BOMB']])if(level>=lvl&&!skills[key]){skills[key]=true;toast('SKILL UNLOCKED: '+name);if(key==='wide'){paddle.w=150;paddle.x=Math.min(paddle.x,W-paddle.w)}if(key==='speed')balls.forEach(b=>{b.vx*=1.25;b.vy*=1.25})}
+}
+function gainXP(base){combo++;comboTimer=150;let mult=1+Math.min(combo,40)*.35;let gain=Math.round(base*mult);xp+=gain;score+=gain*10;burst(lastHitX,lastHitY,'#ffe69b',8);while(xp>=nextXP){xp-=nextXP;level++;nextXP=Math.round(nextXP*1.28+25);skillUnlock();toast('LEVEL UP! Lv.'+level)}updateUI()}
+let lastHitX=400,lastHitY=200;
+function burst(x,y,color,n=10){for(let i=0;i<n;i++)particles.push({x,y,vx:(Math.random()-.5)*5,vy:(Math.random()-.5)*5,life:25+Math.random()*15,color,r:1+Math.random()*3})}
+function updateUI(){$('lv').textContent=level;$('xp').textContent=xp;$('combo').textContent=combo;$('score').textContent=score;$('nextxp').textContent=(nextXP-xp)+' EXP';$('xpfill').style.width=(xp/nextXP*100)+'%';$('balls').textContent=balls.length||0;$('pwidth').textContent=paddle.w;$('laser').textContent=skills.prism?'PRISM':skills.autoLaser?'AUTO':'未解放';
+$('skills').innerHTML=skillInfo.map(([l,n,d])=>`<div class="upgrade ${level<l?'locked':''}"><strong>Lv.${l} · ${n}</strong>${d}</div>`).join('')}
+function collideRect(b,r){return b.x+b.r>r.x&&b.x-b.r<r.x+r.w&&b.y+b.r>r.y&&b.y-b.r<r.y+r.h}
+let keys={};
+function movePaddle(x){paddle.x=Math.max(0,Math.min(W-paddle.w,x-paddle.w/2))}
+canvas.addEventListener('pointermove',e=>{let rect=canvas.getBoundingClientRect();movePaddle((e.clientX-rect.left)/rect.width*W)});
+canvas.addEventListener('pointerdown',e=>{e.preventDefault();if(state!=='playing')launch();else if(balls.length===0)spawnBall()});
+window.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight',' ','a','d'].includes(e.key))e.preventDefault();keys[e.key]=true;if(e.key===' '||e.key==='Enter')launch()});
+window.addEventListener('keyup',e=>keys[e.key]=false);
+$('start').onclick=()=>{if(state==='title'||state==='over')reset();launch()};
+$('pause').onclick=()=>{if(state==='playing'){state='paused';$('pause').textContent='再開'}else if(state==='paused'){state='playing';$('pause').textContent='一時停止'}else launch()};
+function update(){
+if(state!=='playing')return;
+if(keys.ArrowLeft||keys.a)paddle.x-=paddle.speed;if(keys.ArrowRight||keys.d)paddle.x+=paddle.speed;paddle.x=Math.max(0,Math.min(W-paddle.w,paddle.x));
+if(comboTimer>0)comboTimer--;else combo=0;
+if(skills.autoLaser&&Math.random()<.055)lasers.push({x:paddle.x+paddle.w*.28,y:paddle.y-8,vy:-8,prism:false});
+if(skills.prism&&Math.random()<.025){lasers.push({x:paddle.x+paddle.w*.72,y:paddle.y-8,vy:-7,prism:true,angle:-.2});lasers.push({x:paddle.x+paddle.w*.72,y:paddle.y-8,vy:-7,prism:true,angle:.2})}
+if(skills.bomb&&Math.random()<.009)bombs.push({x:paddle.x+paddle.w/2,y:paddle.y-12,r:7,vy:-3});
+for(let i=lasers.length-1;i>=0;i--){let l=lasers[i];l.y+=l.vy;if(l.y<0){lasers.splice(i,1);continue}let hit=blocks.find(b=>b.alive&&l.x>=b.x&&l.x<=b.x+b.w&&l.y>=b.y&&l.y<=b.y+b.h);if(hit){hit.alive=false;lastHitX=l.x;lastHitY=l.y;gainXP(12);burst(l.x,l.y,l.prism?'#ff75c8':'#72f7ff',5);lasers.splice(i,1)}}
+for(let i=bombs.length-1;i>=0;i--){let b=bombs[i];b.y+=b.vy;if(b.y<80){for(let block of blocks)if(block.alive&&Math.hypot(block.x+block.w/2-b.x,block.y+block.h/2-b.y)<105){block.alive=false;lastHitX=block.x;lastHitY=block.y;gainXP(15)}burst(b.x,b.y,'#ff9d61',35);bombs.splice(i,1)}}
+for(let b of balls){
+b.trail.push([b.x,b.y]);if(b.trail.length>8)b.trail.shift();b.x+=b.vx;b.y+=b.vy;
+if(b.x<b.r){b.x=b.r;b.vx=Math.abs(b.vx)}if(b.x>W-b.r){b.x=W-b.r;b.vx=-Math.abs(b.vx)}if(b.y<b.r+4){b.y=b.r+4;b.vy=Math.abs(b.vy)}
+if(b.vy>0&&collideRect(b,paddle)){b.y=paddle.y-b.r;let rel=(b.x-(paddle.x+paddle.w/2))/(paddle.w/2);b.vx=rel*6;b.vy=-Math.max(4.5,Math.sqrt(Math.max(12, b.vx*b.vx+b.vy*b.vy)));burst(b.x,paddle.y,'#72f7ff',3)}
+for(let block of blocks){if(!block.alive||!collideRect(b,block))continue;lastHitX=b.x;lastHitY=b.y;block.hp--;if(block.hp<=0){block.alive=false;gainXP(10+Math.max(0,block.max-1)*5);burst(block.x+block.w/2,block.y+block.h/2,`hsl(${block.hue},90%,65%)`,9)}else{score+=2;updateUI()}if(!skills.prism||Math.random()>.45){let prevX=b.x-b.vx,prevY=b.y-b.vy;if(prevY+b.r<=block.y||prevY-b.r>=block.y+block.h)b.vy*=-1;else b.vx*=-1}break}
+}
+balls=balls.filter(b=>b.y<H+20);
+if(balls.length===0){combo=0;state='ready';toast('ボールを失った！クリックで再発射')}
+if(skills.double&&balls.length===1&&score>100){let b=balls[0];spawnBall(b.x,b.y,-b.vx,-b.vy);skills.double='active'}
+if(skills.triple&&balls.length===1&&score>500){let b=balls[0];spawnBall(b.x,b.y,b.vx*.8,b.vy);spawnBall(b.x,b.y,-b.vx*.8,b.vy);skills.triple='active'}
+if(blocks.every(b=>!b.alive)){state='win';}
+for(let p of particles){p.x+=p.vx;p.y+=p.vy;p.vx*=.98;p.vy*=.98;p.life--}particles=particles.filter(p=>p.life>0);
+}
+function rounded(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r)}
+function drawBackground(){ctx.fillStyle='#080d20';ctx.fillRect(0,0,W,H);let g=ctx.createLinearGradient(0,0,W,H);g.addColorStop(0,'#101d3b');g.addColorStop(1,'#090d20');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);ctx.strokeStyle='#24345455';ctx.lineWidth=1;for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}for(let i=0;i<50;i++){let x=(i*173+17)%W,y=(i*97+23)%H;ctx.fillStyle='#a9dfff66';ctx.fillRect(x,y,2,2)}}
+function draw(){drawBackground();
+for(let block of blocks){if(!block.alive)continue;let hue=block.hue;let grad=ctx.createLinearGradient(block.x,block.y,block.x,block.y+block.h);grad.addColorStop(0,`hsl(${hue},90%,70%)`);grad.addColorStop(1,`hsl(${hue},75%,40%)`);ctx.fillStyle=grad;rounded(block.x,block.y,block.w,block.h,5);ctx.fill();ctx.strokeStyle=`hsl(${hue},100%,82%)`;ctx.stroke();if(block.max>1){ctx.fillStyle='#fff';ctx.font='bold 11px system-ui';ctx.textAlign='center';ctx.fillText(block.hp,block.x+block.w/2,block.y+15)}}
+for(let b of balls){for(let i=0;i<b.trail.length;i++){ctx.globalAlpha=i/b.trail.length*.3;ctx.fillStyle='#78f7ff';ctx.beginPath();ctx.arc(b.trail[i][0],b.trail[i][1],b.r*i/b.trail.length,0,Math.PI*2);ctx.fill()}ctx.globalAlpha=1;ctx.shadowBlur=18;ctx.shadowColor='#72f7ff';ctx.fillStyle='#e9ffff';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0}
+let pg=ctx.createLinearGradient(paddle.x,paddle.y,paddle.x,paddle.y+paddle.h);pg.addColorStop(0,'#eaffff');pg.addColorStop(.4,'#72f7ff');pg.addColorStop(1,'#557dff');ctx.shadowBlur=18;ctx.shadowColor='#72f7ff';ctx.fillStyle=pg;rounded(paddle.x,paddle.y,paddle.w,paddle.h,7);ctx.fill();ctx.shadowBlur=0;
+for(let l of lasers){ctx.strokeStyle=l.prism?'#ff75c8':'#72f7ff';ctx.lineWidth=l.prism?3:2;ctx.shadowBlur=12;ctx.shadowColor=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(l.x,l.y+10);ctx.lineTo(l.x,l.y-8);ctx.stroke()}ctx.shadowBlur=0;
+for(let b of bombs){ctx.fillStyle='#ffad65';ctx.shadowBlur=15;ctx.shadowColor='#ff684a';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill()}ctx.shadowBlur=0;
+for(let p of particles){ctx.globalAlpha=Math.min(1,p.life/20);ctx.fillStyle=p.color;ctx.fillRect(p.x,p.y,p.r,p.r)}ctx.globalAlpha=1;
+if(combo>1&&state==='playing'){ctx.textAlign='left';ctx.font='900 24px system-ui';ctx.fillStyle='#ffe69b';ctx.shadowBlur=15;ctx.shadowColor='#ffb13d';ctx.fillText(`${combo} COMBO  ×${(1+Math.min(combo,40)*.35).toFixed(1)}`,22,38);ctx.shadowBlur=0}
+if(state==='title')overlayTitle();if(state==='ready')overlay('READY?','クリック / タップでスタート');if(state==='paused')overlay('PAUSED','右の「再開」ボタンで続行');if(state==='win')drawWin();
+}
+function overlay(title,sub){ctx.fillStyle='#050918bb';ctx.fillRect(0,0,W,H);ctx.textAlign='center';ctx.shadowBlur=20;ctx.shadowColor='#72f7ff';ctx.fillStyle='#72f7ff';ctx.font='1000 42px system-ui';ctx.fillText(title,W/2,H/2-5);ctx.shadowBlur=0;ctx.fillStyle='#e2ebff';ctx.font='16px system-ui';ctx.fillText(sub,W/2,H/2+32)}
+function overlayTitle(){ctx.fillStyle='#050918d9';ctx.fillRect(0,0,W,H);ctx.textAlign='center';ctx.shadowBlur=26;ctx.shadowColor='#72f7ff';ctx.fillStyle='#72f7ff';ctx.font='1000 45px system-ui';ctx.fillText('COMBO BREAKER',W/2,205);ctx.shadowBlur=0;ctx.fillStyle='#ff85d0';ctx.font='bold 19px system-ui';ctx.fillText('ARKANOID × RPG',W/2,242);ctx.fillStyle='#dfe9ff';ctx.font='15px system-ui';ctx.fillText('BREAK BLOCKS  ·  BUILD COMBOS  ·  UNLOCK POWERS',W/2,285);ctx.fillStyle='#ffe69b';ctx.font='bold 16px system-ui';ctx.fillText('クリック / タップ または「ゲーム開始」',W/2,352);ctx.font='12px system-ui';ctx.fillStyle='#aebfe9';ctx.fillText('ブロック破壊でEXP獲得。コンボを切らさずレベルアップ！',W/2,384)}
+function drawWin(){
+ctx.fillStyle='#070b1ddd';ctx.fillRect(0,0,W,H);
+ctx.textAlign='center';ctx.shadowBlur=20;ctx.shadowColor='#ff75c8';ctx.fillStyle='#ffb0e2';ctx.font='1000 35px system-ui';ctx.fillText('THANK YOU FOR PLAYING',W/2,68);ctx.shadowBlur=0;
+ctx.fillStyle='#e5edff';ctx.font='15px system-ui';ctx.fillText('ALL BLOCKS DESTROYED!  ·  LEVEL '+level,W/2,99);
+// Cute, adult-coded anime beach character, drawn with canvas primitives.
+ctx.save();ctx.translate(W/2,135);
+// sunburst
+for(let i=0;i<18;i++){ctx.save();ctx.rotate(i*Math.PI/9);ctx.strokeStyle='#ffcfef33';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,265);ctx.stroke();ctx.restore()}
+// hair behind head
+ctx.fillStyle='#6a3b80';ctx.beginPath();ctx.ellipse(0,73,74,91,0,0,Math.PI*2);ctx.fill();
+// body / shoulders
+ctx.fillStyle='#f7c6b3';ctx.beginPath();ctx.moveTo(-47,130);ctx.quadraticCurveTo(-66,158,-72,207);ctx.lineTo(72,207);ctx.quadraticCurveTo(66,158,47,130);ctx.closePath();ctx.fill();
+// swimsuit torso
+ctx.fillStyle='#ff5fae';ctx.beginPath();ctx.moveTo(-43,129);ctx.quadraticCurveTo(-35,152,-27,183);ctx.lineTo(27,183);ctx.quadraticCurveTo(35,152,43,129);ctx.quadraticCurveTo(20,143,0,136);ctx.quadraticCurveTo(-20,143,-43,129);ctx.fill();
+// swimsuit straps
+ctx.strokeStyle='#ffb4de';ctx.lineWidth=6;ctx.beginPath();ctx.moveTo(-27,147);ctx.lineTo(-30,115);ctx.moveTo(27,147);ctx.lineTo(30,115);ctx.stroke();
+// neck
+ctx.fillStyle='#f7c6b3';ctx.fillRect(-13,103,26,31);
+// face
+ctx.fillStyle='#ffd7c6';ctx.beginPath();ctx.ellipse(0,65,54,64,0,0,Math.PI*2);ctx.fill();
+// hair cap and bangs
+ctx.fillStyle='#70408c';ctx.beginPath();ctx.ellipse(0,30,58,43,0,Math.PI,Math.PI*2);ctx.lineTo(54,61);ctx.quadraticCurveTo(35,43,23,56);ctx.quadraticCurveTo(7,37,-7,56);ctx.quadraticCurveTo(-26,43,-52,66);ctx.closePath();ctx.fill();
+// side locks
+ctx.beginPath();ctx.moveTo(-50,42);ctx.quadraticCurveTo(-69,96,-43,126);ctx.quadraticCurveTo(-37,91,-42,69);ctx.fill();ctx.beginPath();ctx.moveTo(50,42);ctx.quadraticCurveTo(69,96,43,126);ctx.quadraticCurveTo(37,91,42,69);ctx.fill();
+// eyes
+for(let x of [-21,21]){ctx.fillStyle='#fff';ctx.beginPath();ctx.ellipse(x,68,10,14,0,0,Math.PI*2);ctx.fill();ctx.fillStyle='#4e70b9';ctx.beginPath();ctx.ellipse(x,70,6,10,0,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(x-2,65,3,0,Math.PI*2);ctx.fill()}
+ctx.strokeStyle='#a64e69';ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,87,9,.15,Math.PI-.15);ctx.stroke();
+ctx.fillStyle='#f4a0a9';ctx.globalAlpha=.65;ctx.beginPath();ctx.ellipse(-34,84,9,4,0,0,Math.PI*2);ctx.ellipse(34,84,9,4,0,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
+// hair flower
+ctx.fillStyle='#ffe69b';for(let i=0;i<5;i++){ctx.beginPath();ctx.arc(42+Math.cos(i*Math.PI*2/5)*9,43+Math.sin(i*Math.PI*2/5)*9,6,0,Math.PI*2);ctx.fill()}ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(42,43,4,0,Math.PI*2);ctx.fill();
+ctx.restore();
+ctx.fillStyle='#dce8ff';ctx.font='bold 16px system-ui';ctx.fillText('You are the ultimate combo master!',W/2,424);
+ctx.fillStyle='#ffe69b';ctx.font='bold 18px system-ui';ctx.fillText('SCORE  '+score+'    ·    LEVEL  '+level,W/2,455);
+ctx.fillStyle='#aabce6';ctx.font='14px system-ui';ctx.fillText('「もう一度遊ぶ」で新しいランを始めよう',W/2,495);
+ctx.fillStyle='#ff75c8';rounded(W/2-95,514,190,34,17);ctx.fill();ctx.fillStyle='#190d24';ctx.font='bold 14px system-ui';ctx.fillText('もう一度遊ぶ',W/2,536);
+}
+function frame(t){let dt=Math.min(32,t-last);last=t;if(state==='playing')update();draw();raf=requestAnimationFrame(frame)}
+makeLevel();spawnBall();updateUI();state='title';raf=requestAnimationFrame(frame);
+canvas.addEventListener('click',e=>{if(state==='win'){let r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W,y=(e.clientY-r.top)/r.height*H;if(x>W/2-100&&x<W/2+100&&y>510&&y<555){reset();state='playing'}}});
+})();
+</script></body></html>
